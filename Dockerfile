@@ -185,5 +185,5 @@ COPY --chown=docker:docker . ${APP_HOME}
 
 RUN set -exu; \
   \
-  COMPILE_ASSETS_NPM_INSTALL=0 JS_BUILD_NO_UGLIFY="$JS_BUILD_NO_UGLIFY" bundle exec rails canvas:compile_assets \
+  CANVAS_BUILD_CONCURRENCY=1 COMPILE_ASSETS_NPM_INSTALL=0 JS_BUILD_NO_UGLIFY="$JS_BUILD_NO_UGLIFY" bundle exec rails canvas:compile_assets \
   && yarn cache clean
