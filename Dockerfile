@@ -84,6 +84,3 @@ RUN bash -c ' \
 
 USER docker
 WORKDIR $APP_HOME
-
-EXPOSE 3000
-CMD [ "passenger", "start" ]
