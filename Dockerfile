@@ -38,29 +38,18 @@ WORKDIR $APP_HOME
 
 COPY --chown=docker:docker . $APP_HOME
 
-# optimizing for size here ... get all the dev dependencies so we can
-# compile assets, then throw away everything we don't need
-#
-# the privilege dropping could be slightly less verbose if we ever add
-# gosu (here or upstream)
-#
-# TODO: once we have docker 17.05+ everywhere, do this via multi-stage
-# build
-
-
 RUN bash -c ' \
   # bash cuz better globbing and comments \
   set -e; \
   \
   sudo -u docker -E env HOME=/home/docker PATH=$PATH bundle install --jobs 8; \
   # https://github.com/yarnpkg/yarn/issues/6312 \
-  yarn install --network-concurrency 1 --pure-lockfile; \
-  COMPILE_ASSETS_NPM_INSTALL=0 bundle exec rake canvas:compile_assets; \
+  sudo -u docker -E env HOME=/home/docker PATH=$PATH yarn install --network-concurrency 1 --pure-lockfile; \
+  sudo -u docker -E env HOME=/home/docker PATH=$PATH COMPILE_ASSETS_NPM_INSTALL=0 bundle exec rake canvas:compile_assets; \
   # downgrade to prod dependencies \
   sudo -u docker -E env HOME=/home/docker PATH=$PATH bundle install --without test development; \
   sudo -u docker -E env HOME=/home/docker PATH=$PATH bundle clean --force; \
-  # bash cuz better globbing and comments \
-  # yarn install --network-concurrency 1 --prod; \
+  sudo -u docker -E env HOME=/home/docker PATH=$PATH yarn install --network-concurrency 1; \
   \
   # now some cleanup... \
   rm -rf \
@@ -73,13 +62,13 @@ RUN bash -c ' \
     /tmp/phantomjs \
     .yardoc \
     client_apps/canvas_quizzes/{tmp,node_modules} \
-    config/locales/generated \
+    #config/locales/generated \
     gems/*/node_modules \
     gems/plugins/*/node_modules \
     log \
-    public/dist/maps \
-    public/doc/api/*.json \
-    public/javascripts/translations \
+    #public/dist/maps \
+    #public/doc/api/*.json \
+    #public/javascripts/translations \
     tmp-*.tmp'
 
 USER docker
