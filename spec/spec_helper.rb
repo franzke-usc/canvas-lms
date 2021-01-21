@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -349,12 +351,13 @@ RSpec.configure do |config|
 
   # DOCKER_PROCESSES is only used on Jenkins and we only care to have RspecJunitFormatter on Jenkins.
   if ENV['DOCKER_PROCESSES']
+    file = "log/results/results-#{ENV.fetch('PARALLEL_INDEX', '0').to_i}.xml"
     # if file already exists this is a rerun of a failed spec, don't generate new xml.
-    config.add_formatter "RspecJunitFormatter", "log/results.xml" unless File.file?("log/results.xml")
+    config.add_formatter "RspecJunitFormatter", file unless File.file?(file)
   end
 
   if ENV['RSPEC_LOG']
-    config.add_formatter "ParallelTests::RSpec::RuntimeLogger", "log/parallel_runtime_rspec_tests.log"
+    config.add_formatter "ParallelTests::RSpec::RuntimeLogger", "log/parallel_runtime/parallel_runtime_rspec_tests-#{ENV.fetch('PARALLEL_INDEX', '0').to_i}.log"
   end
 
   if ENV['RAILS_LOAD_ALL_LOCALES'] && RSpec.configuration.filter.rules[:i18n]
@@ -391,6 +394,7 @@ RSpec.configure do |config|
     MultiCache.reset
     Course.enroll_user_call_count = 0
     TermsOfService.skip_automatic_terms_creation = true
+    LiveEvents.clear_context!
     $spec_api_tokens = {}
   end
 
@@ -404,7 +408,6 @@ RSpec.configure do |config|
 
   config.before :all do
     raise "all specs need to use transactions" unless using_transactions_properly?
-    Role.ensure_built_in_roles!
   end
 
   Onceler.configure do |c|
@@ -469,7 +472,7 @@ RSpec.configure do |config|
   config.before :each do
     if Canvas.redis_enabled? && Canvas.redis_used
       # yes, we really mean to run this dangerous redis command
-      Shackles.activate(:deploy) { Canvas.redis.flushdb }
+      GuardRail.activate(:deploy) { Canvas.redis.flushdb }
     end
     Canvas.redis_used = false
   end
@@ -516,7 +519,7 @@ RSpec.configure do |config|
   end
 
   def fixture_file_upload(path, mime_type=nil, binary=false)
-    Rack::Test::UploadedFile.new(File.join(ActionController::TestCase.fixture_path, path), mime_type, binary)
+    Rack::Test::UploadedFile.new(File.join(RSpec.configuration.fixture_path, path), mime_type, binary)
   end
 
   def default_uploaded_data
@@ -542,7 +545,8 @@ RSpec.configure do |config|
     opts = lines.extract_options!
     opts.reverse_merge!(allow_printing: false)
     account = opts[:account] || @account || account_model
-    opts[:batch] ||= account.sis_batches.create!
+    user = opts[:user] || @user || user_model
+    opts[:batch] ||= account.sis_batches.create!(user_id: user.id)
 
     path = generate_csv_file(lines)
     opts[:files] = [path]
@@ -650,7 +654,7 @@ RSpec.configure do |config|
     BACKENDS = %w{FileSystem S3}.map { |backend| AttachmentFu::Backends.const_get(:"#{backend}Backend") }.freeze
 
     class As #:nodoc:
-      private *instance_methods.select { |m| m !~ /(^__|^\W|^binding$)/ }
+      private *instance_methods.select { |m| m !~ /(^__|^\W|^binding$|^untaint$)/ }
 
       def initialize(subject, ancestor)
         @subject = subject
@@ -789,7 +793,10 @@ RSpec.configure do |config|
       @headers = headers
     end
 
-    def read_body(io)
+    def read_body(io = nil)
+      return yield(@body) if block_given?
+      return if io.nil?
+
       io << @body
     end
 
@@ -847,7 +854,9 @@ RSpec.configure do |config|
   end
 end
 
-class I18n::Backend::Simple
+require 'lazy_presumptuous_i18n_backend'
+
+class LazyPresumptuousI18nBackend
   def stub(translations)
     @stubs = translations.with_indifferent_access
     singleton_class.instance_eval do
@@ -864,7 +873,7 @@ class I18n::Backend::Simple
   end
 
   def lookup_with_stubs(locale, key, scope = [], options = {})
-    init_translations unless initialized?
+    ensure_initialized
     keys = I18n.normalize_keys(locale, key, scope, options[:separator])
     keys.inject(@stubs){ |h,k| h[k] if h.respond_to?(:key) } || lookup_without_stubs(locale, key, scope, options)
   end
@@ -898,4 +907,8 @@ end
 
 def enable_default_developer_key!
   enable_developer_key_account_binding!(DeveloperKey.default)
+end
+
+def run_live_events_specs?
+  ENV.fetch('RUN_LIVE_EVENTS_SPECS', '0') == '1'
 end

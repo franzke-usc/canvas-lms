@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -35,7 +37,7 @@ class ContentTag < ActiveRecord::Base
   belongs_to :context, polymorphic:
       [:course, :learning_outcome_group, :assignment, :account,
        { quiz: 'Quizzes::Quiz' }]
-  belongs_to :associated_asset, polymorphic: [:learning_outcome_group],
+  belongs_to :associated_asset, polymorphic: [:learning_outcome_group, lti_resource_link: 'Lti::ResourceLink'],
              polymorphic_prefix: true
   belongs_to :context_module
   belongs_to :learning_outcome
@@ -465,7 +467,7 @@ class ContentTag < ActiveRecord::Base
   end
 
   def context_module_action(user, action, points=nil)
-    Shackles.activate(:master) do
+    GuardRail.activate(:primary) do
       self.context_module.update_for(user, action, self, points) if self.context_module
     end
   end
@@ -493,7 +495,7 @@ class ContentTag < ActiveRecord::Base
   end
 
   def has_rubric_association?
-    content.respond_to?(:rubric_association) && content.rubric_association
+    content.respond_to?(:rubric_association) && !!content.rubric_association&.active?
   end
 
   scope :for_tagged_url, lambda { |url, tag| where(:url => url, :tag => tag) }

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2016 - present Instructure, Inc.
 #
@@ -146,6 +148,7 @@ describe "Enrollment::BatchStateUpdater" do
       recache_course_grade_distribution
       recalculate_enrollment_state
       reset_notifications_cache
+      resolve_cross_account_role
       restore_submissions_and_scores
       set_sis_stickiness
       set_update_cached_due_dates

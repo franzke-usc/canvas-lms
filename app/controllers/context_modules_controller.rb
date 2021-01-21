@@ -28,7 +28,7 @@ class ContextModulesController < ApplicationController
     include ContextModulesHelper
 
     def load_module_file_details
-      attachment_tags = Shackles.activate(:slave) { @context.module_items_visible_to(@current_user).where(content_type: 'Attachment').preload(:content => :folder).to_a }
+      attachment_tags = GuardRail.activate(:secondary) { @context.module_items_visible_to(@current_user).where(content_type: 'Attachment').preload(:content => :folder).to_a }
       attachment_tags.inject({}) do |items, file_tag|
         items[file_tag.id] = {
           id: file_tag.id,
@@ -56,6 +56,7 @@ class ContextModulesController < ApplicationController
       @modules.each(&:check_for_stale_cache_after_unlocking!)
       @collapsed_modules = ContextModuleProgression.for_user(@current_user).for_modules(@modules).pluck(:context_module_id, :collapsed).select{|cm_id, collapsed| !!collapsed }.map(&:first)
       @section_visibility = @context.course_section_visibility(@current_user)
+      @combined_active_quizzes = combined_active_quizzes
 
       @can_edit = can_do(@context, @current_user, :manage_content)
       @can_view_grades = can_do(@context, @current_user, :view_all_grades)
@@ -72,7 +73,7 @@ class ContextModulesController < ApplicationController
 
       @menu_tools = {}
       placements = [:assignment_menu, :discussion_topic_menu, :file_menu, :module_menu, :quiz_menu, :wiki_page_menu]
-      tools = Shackles.activate(:slave) do
+      tools = GuardRail.activate(:secondary) do
         ContextExternalTool.all_tools_for(@context, placements: placements,
           :root_account => @domain_root_account, :current_user => @current_user).to_a
       end
@@ -107,6 +108,24 @@ class ContextModulesController < ApplicationController
 
       conditional_release_js_env(includes: :active_rules)
     end
+
+    private
+    def combined_active_quizzes
+      classic_quizzes = @context.
+        active_quizzes.
+        reorder(Quizzes::Quiz.best_unicode_collation_key('title')).
+        limit(400).
+        pluck(:id, :title, Arel.sql("'quiz' AS type"))
+
+      lti_quizzes = @context.
+        active_assignments.
+        type_quiz_lti.
+        reorder(Assignment.best_unicode_collation_key('title')).
+        limit(400).
+        pluck(:id, :title, Arel.sql("'assignment' AS type"))
+
+      (classic_quizzes + lti_quizzes).sort_by{ |quiz_attrs| Canvas::ICU.collation_key(quiz_attrs[1] || CanvasSort::First) }.take(400)
+    end
   end
   include ModuleIndexHelper
 
@@ -124,10 +143,7 @@ class ContextModulesController < ApplicationController
       end
       add_body_class('padless-content')
       js_bundle :context_modules
-      js_env(
-        CONTEXT_MODULE_ASSIGNMENT_INFO_URL: context_url(@context, :context_context_modules_assignment_info_url),
-        PROCESS_MULTIPLE_CONTENT_ITEMS: Account.site_admin.feature_enabled?(:process_multiple_content_items_modules_index)
-      )
+      js_env(CONTEXT_MODULE_ASSIGNMENT_INFO_URL: context_url(@context, :context_context_modules_assignment_info_url))
       css_bundle :content_next, :context_modules2
       render stream: can_stream_template?
     end
@@ -303,7 +319,7 @@ class ContextModulesController < ApplicationController
       @context.touch
 
       # # Background this, not essential that it happen right away
-      # ContextModule.send_later(:update_tag_order, @context)
+      # ContextModule.delay.update_tag_order(@context)
       render :json => @modules.map{ |m| m.as_json(include: :content_tags, methods: :workflow_state) }
     end
   end
@@ -312,7 +328,7 @@ class ContextModulesController < ApplicationController
     if authorized_action(@context, @current_user, :read)
       info = {}
 
-      all_tags = Shackles.activate(:slave) { @context.module_items_visible_to(@current_user).to_a }
+      all_tags = GuardRail.activate(:secondary) { @context.module_items_visible_to(@current_user).to_a }
       user_is_admin = @context.grants_right?(@current_user, session, :read_as_admin)
 
       ActiveRecord::Associations::Preloader.new.preload(all_tags, :content)
@@ -368,7 +384,7 @@ class ContextModulesController < ApplicationController
       is_master_course = MasterCourses::MasterTemplate.is_master_course?(@context)
 
       if is_child_course || is_master_course
-        tag_ids = Shackles.activate(:slave) do
+        tag_ids = GuardRail.activate(:secondary) do
           tag_scope = @context.module_items_visible_to(@current_user).where(:content_type => %w{Assignment Attachment DiscussionTopic Quizzes::Quiz WikiPage})
           tag_scope = tag_scope.where(:id => params[:tag_id]) if params[:tag_id]
           tag_scope.pluck(:id)
@@ -466,12 +482,11 @@ class ContextModulesController < ApplicationController
     progression = mod.evaluate_for(@current_user)
     progression ||= ContextModuleProgression.new
     if value_to_boolean(should_collapse)
-      progression.collapsed = true
+      progression.collapse!(skip_save: progression.new_record?)
     else
-      progression.uncollapse!
+      progression.uncollapse!(skip_save: progression.new_record?)
     end
-    progression.save unless progression.new_record?
-    progression
+    return progression
   end
 
   def toggle_collapse
@@ -582,7 +597,8 @@ class ContextModulesController < ApplicationController
     if authorized_action(@module, @current_user, :update)
       @tag = @module.add_item(params[:item])
       unless @tag&.valid?
-        return render :json => @tag.errors, :status => :bad_request
+        body = @tag.nil? ? { error: "Could not find item to tag" } : @tag.errors
+        return render :json => body, :status => :bad_request
       end
       json = @tag.as_json
       json['content_tag'].merge!(

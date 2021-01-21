@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -183,7 +185,7 @@ class UserProfile < ActiveRecord::Base
   end
 
   def insert_past_global_announcements(tabs, user, opts)
-    if user && opts[:root_account]&.feature_enabled?(:past_announcements)
+    if user
       tabs <<
         {
           id: TAB_PAST_GLOBAL_ANNOUNCEMENTS,

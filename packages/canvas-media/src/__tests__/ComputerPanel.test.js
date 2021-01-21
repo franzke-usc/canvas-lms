@@ -43,10 +43,8 @@ const uploadMediaTranslations = {
     CLOSED_CAPTIONS_CHOOSE_FILE: 'Choose caption file',
     CLOSED_CAPTIONS_SELECT_LANGUAGE: 'Select Language',
     COMPUTER_PANEL_TITLE: 'Computer',
-    DRAG_DROP_CLICK_TO_BROWSE: 'Drop and drop, or click to browse your computer',
+    DRAG_DROP_CLICK_TO_BROWSE: 'Drag and drop, or click to browse your computer',
     DRAG_FILE_TEXT: 'Drag a file here',
-    EMBED_PANEL_TITLE: 'Embed',
-    EMBED_VIDEO_CODE_TEXT: 'Embed Code',
     INVALID_FILE_TEXT: 'Invalid File',
     LOADING_MEDIA: 'Loading...',
     RECORD_PANEL_TITLE: 'Record',
@@ -146,9 +144,32 @@ describe('UploadMedia: ComputerPanel', () => {
       const aFile = new File(['foo'], 'foo.avi', {
         type: 'video/avi'
       })
-      const {getByTestId} = renderPanel({theFile: aFile, hasUploadedFile: true})
+      const {getByTestId, getByText} = renderPanel({theFile: aFile, hasUploadedFile: true})
       const icon = await waitForElement(() => getByTestId('preview-video-icon'))
       expect(icon).toBeInTheDocument()
+      expect(getByText('No preview is available for this file.')).toBeInTheDocument()
+    })
+
+    it('Renders a video icon if afile type is a video/x-ms-wma', async () => {
+      // because avi videos won't load in the player via a blob url
+      const aFile = new File(['foo'], 'foo.wma', {
+        type: 'video/x-ms-wma'
+      })
+      const {getByTestId, getByText} = renderPanel({theFile: aFile, hasUploadedFile: true})
+      const icon = await waitForElement(() => getByTestId('preview-video-icon'))
+      expect(icon).toBeInTheDocument()
+      expect(getByText('No preview is available for this file.')).toBeInTheDocument()
+    })
+
+    it('Renders a video icon if afile type is a video/x-ms-wmv', async () => {
+      // because avi videos won't load in the player via a blob url
+      const aFile = new File(['foo'], 'foo.wmv', {
+        type: 'video/x-ms-wmv'
+      })
+      const {getByTestId, getByText} = renderPanel({theFile: aFile, hasUploadedFile: true})
+      const icon = await waitForElement(() => getByTestId('preview-video-icon'))
+      expect(icon).toBeInTheDocument()
+      expect(getByText('No preview is available for this file.')).toBeInTheDocument()
     })
 
     it('clicking the trash button removes the file preview', async () => {

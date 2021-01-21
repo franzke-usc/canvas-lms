@@ -18,7 +18,7 @@
  * with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-library "canvas-builds-library"
+library "canvas-builds-library@${env.CANVAS_BUILDS_REFSPEC}"
 
 def cleanupFn() {
   try {
@@ -41,7 +41,7 @@ def cleanupFn() {
     ]
   } finally {
     sh 'rm -vrf ./spec_results/'
-    execute 'bash/docker-cleanup.sh --allow-failure'
+    libraryScript.execute 'bash/docker-cleanup.sh --allow-failure'
   }
 }
 
@@ -49,6 +49,7 @@ pipeline {
   agent none
   options {
     ansiColor('xterm')
+    timeout(time: 15)
     timestamps()
   }
 
@@ -66,11 +67,13 @@ pipeline {
           protectedNode('canvas-docker', { cleanupFn() }) {
             stage ('Setup') {
               cleanAndSetup()
-              timeout(time: 5) {
-                checkout scm
+              timeout(time: 2) {
+               def refspecToCheckout = env.GERRIT_PROJECT == "canvas-lms" ? env.JENKINSFILE_REFSPEC : env.CANVAS_LMS_REFSPEC
+
+               checkoutRepo("canvas-lms", refspecToCheckout, 1)
+
                 sh 'build/new-jenkins/docker-compose-pull.sh'
                 sh 'build/new-jenkins/docker-compose-build-up.sh'
-                sh 'build/new-jenkins/docker-compose-setup-cassandra-keyspaces.sh'
               }
             }
 

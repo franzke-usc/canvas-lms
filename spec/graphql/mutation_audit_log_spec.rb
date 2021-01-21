@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2019 Instructure, Inc.
 #
@@ -27,6 +29,7 @@ describe AuditLogFieldExtension do
   end
 
   before(:once) do
+    Canvas::DynamoDB::DevUtils.initialize_ddb_for_development!(:auditors, "graphql_mutations", recreate: true)
     course_with_student(active_all: true)
     @assignment = @course.assignments.create! name: "asdf"
     MUTATION = <<~MUTATION
@@ -62,9 +65,12 @@ describe AuditLogFieldExtension do
 
   it "fails gracefully when dynamo isn't working, with captured exception" do
     require 'canvas_dynamodb'
-    dynamo = CanvasDynamoDB::Database.new("asdf", "asdf", nil,
-                                          {region: "us-east-1", endpoint: "http://localhost:8000"},
-                                          Rails.logger)
+    dynamo = CanvasDynamoDB::Database.new(
+      "asdf",
+      prefix: "asdf",
+      client_opts: { region: "us-east-1", endpoint: "http://localhost:8000" },
+      logger: Rails.logger
+    )
     expect(dynamo).to receive(:put_item).and_raise(Aws::DynamoDB::Errors::ServiceError.new("two", "arguments"))
     expect(::Canvas::Errors).to receive(:capture_exception) do |name, e|
       expect(name).to eq(:graphql_mutation_audit_logs)
@@ -81,6 +87,8 @@ describe AuditLogFieldExtension::Logger do
   let(:mutation) { double(graphql_name: "asdf") }
 
   before(:once) do
+    WebMock.enable_net_connect!
+    Canvas::DynamoDB::DevUtils.initialize_ddb_for_development!(:auditors, "graphql_mutations", recreate: true)
     course_with_teacher(active_all: true)
     @entry = @course.assignments.create! name: "asdf"
   end

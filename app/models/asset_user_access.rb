@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -25,9 +27,9 @@ class AssetUserAccess < ActiveRecord::Base
   belongs_to :context, polymorphic: [:account, :course, :group, :user], polymorphic_prefix: true
   belongs_to :user
   has_many :page_views
+
   # if you add any more callbacks, be sure to update #log
   before_save :infer_defaults
-
   resolves_root_account through: ->(instance){ instance.infer_root_account_id }
 
   scope :for_context, lambda { |context| where(:context_id => context, :context_type => context.class.to_s) }
@@ -35,9 +37,18 @@ class AssetUserAccess < ActiveRecord::Base
   scope :participations, -> { where(:action_level => 'participate') }
   scope :most_recent, -> { order('updated_at DESC') }
 
-  def infer_root_account_id
-    return nil if context_type == 'User'
-    context&.resolved_root_account_id
+  def infer_root_account_id(asset_for_root_account_id=nil)
+    if context_type != 'User'
+      context&.resolved_root_account_id
+    elsif asset_for_root_account_id.is_a?(User)
+      # Unfillable. Point to the dummy root account with id=0.
+      0
+    else
+      asset_for_root_account_id.try(:resolved_root_account_id) ||
+        asset_for_root_account_id.try(:root_account_id)
+      # We could default `asset_for_root_account_id ||= asset`, but AUAs shouldn't
+      # ever be created outside of .log(), and calling `asset` would add a DB hit
+    end
   end
 
   def category
@@ -193,7 +204,7 @@ class AssetUserAccess < ActiveRecord::Base
     return unless user && accessed_asset[:code]
     correct_context = self.get_correct_context(context, accessed_asset)
     return unless correct_context && Context::CONTEXT_TYPES.include?(correct_context.class_name.to_sym)
-    Shackles.activate(:slave) do
+    GuardRail.activate(:secondary) do
       @access = AssetUserAccess.where(user: user, asset_code: accessed_asset[:code]).
         polymorphic_where(context: correct_context).first_or_initialize
     end
@@ -211,8 +222,36 @@ class AssetUserAccess < ActiveRecord::Base
 
     # manually call callbacks to avoid transactions. this saves a BEGIN/COMMIT per request
     infer_defaults
-    save_without_transaction
+    self.root_account_id ||= infer_root_account_id(accessed[:asset_for_root_account_id])
+
+    if self.class.use_log_compaction_for_views? && self.eligible_for_log_path?
+      # Since this is JUST a view bump, we'll write it to the
+      # view log and let periodic jobs compact them later
+      # (this is intentionally trading off more latency for less I/O pressure)
+      AssetUserAccessLog.put_view(self)
+    else
+      save_without_transaction
+    end
     self
+  end
+
+  def eligible_for_log_path?
+    # in general we want writes to go to the table right now.
+    # view count updates happen a LOT though, so if the setting is
+    # configured such that we're allowed to use the log path, check
+    # if this set of changes is "just" a view update.
+    change_hash = self.changes_to_save
+    updated_key_set = self.changes_to_save.keys.to_set
+    return false unless updated_key_set.include?('view_score')
+    return false unless (updated_key_set - Set.new(['updated_at', 'last_access', 'view_score'])).empty?
+    # ASSUMPTION: All view_score updates are a single increment.
+    # If this is violated, rather than failing to capture, we should accept the
+    # write through the row update for now (by returning false from here).
+    view_delta = change_hash['view_score'].compact
+    # ^array with old and new value, which CAN be null, hence compact
+    return false if view_delta.size < 1
+    return view_delta[0] == 1.0 if view_delta.size == 1
+    (view_delta[1] - view_delta[0]).abs == 1 # this is an increment, if true
   end
 
   def log_action(level)
@@ -222,6 +261,14 @@ class AssetUserAccess < ActiveRecord::Base
     if self.action_level != 'participate'
       self.action_level = (level == 'submit') ? 'participate' : level
     end
+  end
+
+  def self.use_log_compaction_for_views?
+    self.view_counting_method.to_s == "log"
+  end
+
+  def self.view_counting_method
+    Canvas::Plugin.find(:asset_user_access_logs).settings[:write_path]
   end
 
   def self.infer_asset(code)
@@ -248,6 +295,9 @@ class AssetUserAccess < ActiveRecord::Base
     announcements: ["icon-announcement", t('Announcement')].freeze,
     assignments: ["icon-assignment", t('Assignment')].freeze,
     calendar: ["icon-calendar-month", t('Calendar')].freeze,
+    collaborations: ["icon-document", t('Collaboration')].freeze,
+    conferences: ["icon-group", t('Conference')].freeze,
+    external_tools: ["icon-link", t('App')].freeze,
     files: ["icon-download", t('File')].freeze,
     grades: ["icon-gradebook", t('Grades')].freeze,
     home: ["icon-home", t('Home')].freeze,
@@ -263,11 +313,11 @@ class AssetUserAccess < ActiveRecord::Base
   }.freeze
 
   def icon
-    ICON_MAP[asset_category.to_sym][0] || "icon-question"
+    ICON_MAP[asset_category.to_sym]&.[](0) || "icon-question"
   end
 
   def readable_category
-    ICON_MAP[asset_category.to_sym][1] || ""
+    ICON_MAP[asset_category.to_sym]&.[](1) || ""
   end
 
   private

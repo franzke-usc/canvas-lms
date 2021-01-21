@@ -31,6 +31,7 @@ class Login::CanvasController < ApplicationController
     @headers = false
     flash.now[:error] = params[:message] if params[:message]
     flash.now[:notice] = t('Your password has been changed.') if params[:password_changed] == '1'
+    @include_recaptcha = recaptcha_enabled?
 
     maybe_render_mobile_login
   end
@@ -96,10 +97,15 @@ class Login::CanvasController < ApplicationController
       pseudonym = Pseudonym.authenticate(params[:pseudonym_session],
                                          @domain_root_account.trusted_account_ids,
                                          request.remote_ip)
-      if pseudonym && pseudonym != :too_many_attempts
+      if pseudonym && ![:too_many_attempts, :impossible_credentials].include?(pseudonym)
         @pseudonym_session = PseudonymSession.new(pseudonym, params[:pseudonym_session][:remember_me] == "1")
         found = @pseudonym_session.save
       end
+    end
+
+    if pseudonym == :impossible_credentials
+      unsuccessful_login t("Invalid username or password")
+      return
     end
 
     if pseudonym == :too_many_attempts || @pseudonym_session.too_many_attempts?

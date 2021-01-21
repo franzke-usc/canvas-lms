@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2015 - present Instructure, Inc.
 #
@@ -569,6 +571,13 @@ describe Oauth2ProviderController do
           it { is_expected.to have_http_status 200 }
         end
 
+        context 'with a port in the aud' do
+          let(:aud) { Rails.application.routes.url_helpers.oauth2_token_url(host: 'test.host', port: 3000) }
+
+          before { request.host = 'test.host:3000' }
+          it { is_expected.to have_http_status 200 }
+        end
+
         context 'with bad exp' do
           let(:exp) { 1.minute.ago.to_i }
 
@@ -700,6 +709,10 @@ describe Oauth2ProviderController do
       expect(response).to redirect_to(oauth2_auth_url(:code => 'code', :state => '1234567890'))
     end
 
+    it "gracefully errors if the session has been destroyed" do
+      post :accept, session: {}
+      expect(response.code.to_i).to eq(400)
+    end
   end
 
   describe 'GET deny' do
@@ -717,6 +730,11 @@ describe Oauth2ProviderController do
       get 'deny', session: session_hash
       expect(response).to be_redirect
       expect(response.location).not_to match(/state=/)
+    end
+
+    it "doesn't error on an empty session" do
+      get 'deny', session: {}
+      expect(response).to be_bad_request
     end
   end
 

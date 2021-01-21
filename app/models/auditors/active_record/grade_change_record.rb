@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2020 - present Instructure, Inc.
 #
@@ -64,6 +66,14 @@ module Auditors::ActiveRecord
 
     def version_number
       submission_version_number
+    end
+
+    def override_grade?
+      submission_id.blank?
+    end
+
+    def in_grading_period?
+      grading_period_id.present?
     end
 
     def self.resolve_id_or_placeholder(id)

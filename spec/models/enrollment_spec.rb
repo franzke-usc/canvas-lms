@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -181,7 +183,8 @@ describe Enrollment do
     end
 
     it "should return the sis enrollment type otherwise" do
-      e = TaEnrollment.new
+      c = Account.default.courses.create!
+      e = TaEnrollment.create(course: c)
       expect(e.sis_role).to eq 'ta'
     end
   end
@@ -1401,7 +1404,7 @@ describe Enrollment do
 
   context "permissions" do
     it "should grant read rights to account members with the ability to read_roster" do
-      role = Role.get_built_in_role("AccountMembership")
+      role = Role.get_built_in_role("AccountMembership", root_account_id: Account.default.id)
       user = account_admin_user(:role => role)
       RoleOverride.create!(:context => Account.default, :permission => :read_roster,
                            :role => role, :enabled => true)
@@ -1435,11 +1438,10 @@ describe Enrollment do
     end
 
     it "sends later for a single student" do
-      expect(Enrollment).to receive(:send_later_if_production_enqueue_args).with(
-        :recompute_final_score,
-        hash_including(singleton: "Enrollment.recompute_final_score:#{@user.id}:#{@course.id}:"),
-        @user.id, @course.id, {}
-      )
+      expect(Enrollment).to receive(:delay_if_production).
+        with(hash_including(singleton: "Enrollment.recompute_final_score:#{@user.id}:#{@course.id}:")).
+        and_return(Enrollment)
+      expect(Enrollment).to receive(:recompute_final_score).with(@user.id, @course.id, {})
 
       Enrollment.recompute_final_score_in_singleton(@user.id, @course.id)
     end
@@ -1454,8 +1456,8 @@ describe Enrollment do
       expect(@user.student_enrollments.reload.count).to eq 2
       course_with_student(:user => @user)
       @c2 = @course
-      expect(Enrollment).to receive(:recompute_final_score).with(@user.id, @c1.id, {})
-      expect(Enrollment).to receive(:recompute_final_score).with(@user.id, @c2.id, {})
+      expect(Enrollment).to receive(:recompute_final_score).with(@user.id, @c1.id)
+      expect(Enrollment).to receive(:recompute_final_score).with(@user.id, @c2.id)
       Enrollment.recompute_final_scores(@user.id)
     end
   end
@@ -1698,7 +1700,7 @@ describe Enrollment do
         end
 
         it "recomputes scores for the student" do
-          expect(Enrollment).to receive(:recompute_final_score).with(@enrollment.user_id, @enrollment.course_id, {})
+          expect(Enrollment).to receive(:recompute_final_score).with(@enrollment.user_id, @enrollment.course_id)
           @enrollment.workflow_state = 'invited'
           @enrollment.save!
           @enrollment.accept

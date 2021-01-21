@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - 2013 Instructure, Inc.
 #
@@ -256,7 +258,7 @@ describe Api::V1::User do
     end
 
     it "requires :view_user_logins to return login_id" do
-      RoleOverride.create!(context: Account.default, role: Role.get_built_in_role('AccountAdmin'),
+      RoleOverride.create!(context: Account.default, role: admin_role,
             permission: 'view_user_logins', enabled: false)
       @user = User.create!(:name => 'Test User')
       @user.pseudonyms.create!(:unique_id => 'abc', :account => Account.default)
@@ -277,7 +279,7 @@ describe Api::V1::User do
       end
 
       it "does not include email without :read_email_addresses permission" do
-        RoleOverride.create!(context: Account.default, role: Role.get_built_in_role('AccountAdmin'),
+        RoleOverride.create!(context: Account.default, role: admin_role,
             permission: 'read_email_addresses', enabled: false)
         json = @test_api.user_json(@user, @admin, {}, ['email'], Account.default)
         expect(json.keys).not_to include 'email'
@@ -286,24 +288,23 @@ describe Api::V1::User do
 
     context "computed scores" do
       before :once do
-        @enrollment.scores.create!
         assignment_group = @course.assignment_groups.create!
-        @enrollment.find_score(course_score: true).
-          update!(current_score: 95.0, final_score: 85.0, unposted_current_score: 90.0, unposted_final_score: 87.0)
-        @enrollment.find_score(assignment_group_id: assignment_group).
-          update!(current_score: 50.0, final_score: 40.0, unposted_current_score: 55.0, unposted_final_score: 45.0)
         @student1 = @student
-        @student1_enrollment = @enrollment
+        @student1_enrollment = @student1.enrollments.first
+        @student1_enrollment.scores.create! if @student1_enrollment.scores.blank?
+        @student1_enrollment.find_score(course_score: true).
+          update!(current_score: 95.0, final_score: 85.0, unposted_current_score: 90.0, unposted_final_score: 87.0)
+        @student1_enrollment.find_score(assignment_group_id: assignment_group.id).
+          update!(current_score: 50.0, final_score: 40.0, unposted_current_score: 55.0, unposted_final_score: 45.0)
         @student2 = course_with_student(:course => @course).user
       end
 
       before :each do
-        @course.grading_standard_enabled = true
-        @course.save!
+        @course.update!(grading_standard_enabled: true)
       end
 
       it "should return posted course scores as admin" do
-        json = @test_api.user_json(@student, @admin, {}, [], @course, [@student1_enrollment])
+        json = @test_api.user_json(@student1, @admin, {}, [], @course, [@student1_enrollment])
         expect(json['enrollments'].first['grades']).to eq({
           "html_url" => "",
           "current_score" => 95.0,
@@ -1313,6 +1314,22 @@ describe "Users API", type: :request do
           expect(new_user.shard).to eq @shard1
           expect(new_user.pseudonym.account).to eq @other_account
         end
+
+        it "should not error when there is not a local pseudonym" do
+          @user = User.create!(name: 'default shard user')
+          @shard1.activate do
+            account = Account.create!
+            @pseudonym = account.pseudonyms.create!(user: @user, unique_id: 'so_unique@example.com')
+          end
+          # We need to return the pseudonym here, or one is created from the api_call method,
+          # or we'd need to setup more stuff in a plugin that would make this return happen without the allow method
+          allow(SisPseudonym).to receive(:for).with(@user, Account.default, type: :implicit, require_sis: false).and_return(@pseudonym)
+          api_call(:put, "/api/v1/users/#{@user.id}",
+                   { controller: 'users', action: 'update', format: 'json', id: @user.id.to_s },
+                   { user: { name: "Test User" } }
+          )
+          expect(response).to be_successful
+        end
       end
 
       it "respects authentication_provider_id" do
@@ -1639,6 +1656,89 @@ describe "Users API", type: :request do
         end
       end
 
+      context 'pronouns' do
+        context 'when can_change_pronouns=true' do
+          before :once do
+            Account.default.tap do |a|
+              a.settings[:can_add_pronouns] = true
+              a.settings[:can_change_pronouns] = true
+              a.save!
+            end
+          end
+
+          it "should clear attribute when empty string is passed" do
+            @student.pronouns = "He/Him"
+            @student.save!
+            json = api_call(:put, @path, @path_options, {:user => {:pronouns => ""}})
+            expect(json['pronouns']).to be_nil
+            expect(@student.reload.pronouns).to be_nil
+          end
+
+          it "should update with a default pronoun" do
+            approved_pronoun = "He/Him"
+            json = api_call(:put, @path, @path_options, {:user => {:pronouns => approved_pronoun}})
+            expect(json['pronouns']).to eq approved_pronoun
+            expect(@student.reload.pronouns).to eq approved_pronoun
+            expect(@student.read_attribute(:pronouns)).to eq "he_him"
+          end
+
+          it "should fix the case when pronoun does not match default pronoun case" do
+            wrong_case_pronoun = "he/him"
+            expected_pronoun = "He/Him"
+            json = api_call(:put, @path, @path_options, {:user => {:pronouns => wrong_case_pronoun}})
+            expect(json['pronouns']).to eq expected_pronoun
+            expect(@student.reload.pronouns).to eq expected_pronoun
+            expect(@student.read_attribute(:pronouns)).to eq "he_him"
+          end
+
+          it "should fix the case when pronoun does not match custom pronoun case" do
+            Account.default.tap do |a|
+              a.pronouns = ["Siya/Siya", "Ito/Iyan"]
+              a.save!
+            end
+            wrong_case_pronoun = "ito/iyan"
+            expected_pronoun = "Ito/Iyan"
+            json = api_call(:put, @path, @path_options, {:user => {:pronouns => wrong_case_pronoun}})
+            expect(json['pronouns']).to eq expected_pronoun
+            expect(@student.reload.pronouns).to eq expected_pronoun
+            expect(@student.read_attribute(:pronouns)).to eq expected_pronoun
+          end
+
+          it "should not update when pronoun is not approved" do
+            @student.pronouns = "She/Her"
+            @student.save!
+            original_pronoun = @student.pronouns
+            unapproved_pronoun = "Unapproved/Unapproved"
+            json = api_call(:put, @path, @path_options, {:user => {:pronouns => unapproved_pronoun}})
+            expect(json['pronouns']).to eq original_pronoun
+            expect(@student.reload.pronouns).to eq original_pronoun
+          end
+        end
+
+        context 'when can_change_pronouns=false' do
+          before :once do
+            Account.default.tap do |a|
+              a.settings[:can_add_pronouns] = true
+              a.settings[:can_change_pronouns] = false
+              a.save!
+            end
+          end
+
+          it "errors" do
+            @student.pronouns = "She/Her"
+            @student.save!
+            original_pronoun = @student.pronouns
+            test_pronoun = "He/Him"
+            raw_api_call(:put, @path, @path_options, {:user => {:pronouns => test_pronoun}})
+            json = JSON.parse(response.body)
+            expect(response.code).to eq '401'
+            expect(json['status']).to eq 'unauthorized'
+            expect(json['errors'][0]['message']).to eq 'user not authorized to perform that action'
+            expect(@student.reload.pronouns).to eq original_pronoun
+          end
+        end
+      end
+
       it "should be able to update a user's profile" do
         Account.default.tap{|a| a.settings[:enable_profiles] = true; a.save!}
         new_title = "Burninator"
@@ -1761,6 +1861,27 @@ describe "Users API", type: :request do
       before :once do
         user_with_pseudonym name: "Earnest Lambert Watkins"
         course_with_teacher user: @user, active_all: true
+      end
+
+      context 'pronouns' do
+        it "returns an error when user does not have manage rights" do
+          Account.default.tap do |a|
+            a.settings[:can_add_pronouns] = true
+            a.settings[:can_change_pronouns] = true
+            a.save!
+          end
+
+          @student.pronouns = "She/Her"
+          @student.save!
+          original_pronoun = @student.pronouns
+          test_pronoun = "He/Him"
+          raw_api_call(:put, @path, @path_options, {:user => {:pronouns => test_pronoun}})
+          json = JSON.parse(response.body)
+          expect(response.code).to eq '401'
+          expect(json['status']).to eq 'unauthorized'
+          expect(json['errors'][0]['message']).to eq 'user not authorized to perform that action'
+          expect(@student.reload.pronouns).to eq original_pronoun
+        end
       end
 
       context "with users_can_edit_name enabled" do

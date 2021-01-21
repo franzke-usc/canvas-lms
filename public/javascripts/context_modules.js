@@ -1937,84 +1937,6 @@ modules.initModuleManagement = function() {
       .catch(showFlashError('Error duplicating item'))
   })
 
-  function renderCopyToTray(open, contentSelection, returnFocusTo) {
-    ReactDOM.render(
-      <DirectShareCourseTray
-        open={open}
-        sourceCourseId={ENV.COURSE_ID}
-        contentSelection={contentSelection}
-        onDismiss={() => {
-          renderCopyToTray(false, contentSelection, returnFocusTo)
-          returnFocusTo.focus()
-        }}
-      />,
-      document.getElementById('direct-share-mount-point')
-    )
-  }
-
-  function renderSendToTray(open, contentSelection, returnFocusTo) {
-    ReactDOM.render(
-      <DirectShareUserModal
-        open={open}
-        sourceCourseId={ENV.COURSE_ID}
-        contentShare={contentSelection}
-        onDismiss={() => {
-          renderSendToTray(false, contentSelection, returnFocusTo)
-          returnFocusTo.focus()
-        }}
-      />,
-      document.getElementById('direct-share-mount-point')
-    )
-  }
-
-  $('.module_copy_to').live('click', event => {
-    event.preventDefault()
-    const moduleId = $(event.target)
-      .closest('.context_module')
-      .data('module-id')
-      .toString()
-    const selection = {modules: [moduleId]}
-    const returnFocusTo = $(event.target)
-      .closest('ul')
-      .prev('.al-trigger')
-    renderCopyToTray(true, selection, returnFocusTo)
-  })
-
-  $('.module_send_to').live('click', event => {
-    event.preventDefault()
-    const moduleId = $(event.target)
-      .closest('.context_module')
-      .data('module-id')
-      .toString()
-    const selection = {content_type: 'module', content_id: moduleId}
-    const returnFocusTo = $(event.target)
-      .closest('ul')
-      .prev('.al-trigger')
-    renderSendToTray(true, selection, returnFocusTo)
-  })
-
-  $('.module_item_copy_to').live('click', event => {
-    event.preventDefault()
-    const select_id = $(event.target).data('select-id')
-    const select_class = $(event.target).data('select-class')
-    const selection = {[select_class]: [select_id]}
-    const returnFocusTo = $(event.target)
-      .closest('ul')
-      .prev('.al-trigger')
-    renderCopyToTray(true, selection, returnFocusTo)
-  })
-
-  $('.module_item_send_to').live('click', event => {
-    event.preventDefault()
-    const content_id = $(event.target).data('content-id')
-    const content_type = $(event.target).data('content-type')
-    const selection = {content_id, content_type}
-    const returnFocusTo = $(event.target)
-      .closest('ul')
-      .prev('.al-trigger')
-    renderSendToTray(true, selection, returnFocusTo)
-  })
-
   $('#add_module_prerequisite_dialog .cancel_button').click(() => {
     $('#add_module_prerequisite_dialog').dialog('close')
   })
@@ -2563,98 +2485,100 @@ $(document).ready(function() {
 
   // Keyboard Shortcuts:
   // "k" and "up arrow" move the focus up between modules and module items
-  const $document = $(document)
-  $document.keycodes('k up', event => {
-    const params = {
-      selectWhenModuleFocused: {
-        item:
-          $currentElem &&
-          $currentElem.prev('.context_module').find('.context_module_item:visible:last'),
-        fallbackModule: $currentElem && $currentElem.prev('.context_module')
-      },
-      selectWhenModuleItemFocused: {
-        item: $currentElem && $currentElem.prev('.context_module_item:visible'),
-        fallbackModule: $currentElem && $currentElem.parents('.context_module')
+  if (!ENV.disable_keyboard_shortcuts) {
+    const $document = $(document)
+    $document.keycodes('k up', event => {
+      const params = {
+        selectWhenModuleFocused: {
+          item:
+            $currentElem &&
+            $currentElem.prev('.context_module').find('.context_module_item:visible:last'),
+          fallbackModule: $currentElem && $currentElem.prev('.context_module')
+        },
+        selectWhenModuleItemFocused: {
+          item: $currentElem && $currentElem.prev('.context_module_item:visible'),
+          fallbackModule: $currentElem && $currentElem.parents('.context_module')
+        }
       }
-    }
-    const $elem = selectItem(params)
-    if ($elem.length) $currentElem = $elem
-  })
-
-  // "j" and "down arrow" move the focus down between modules and module items
-  $document.keycodes('j down', event => {
-    const params = {
-      selectWhenModuleFocused: {
-        item: $currentElem && $currentElem.find('.context_module_item:visible:first'),
-        fallbackModule: $currentElem && $currentElem.next('.context_module')
-      },
-      selectWhenModuleItemFocused: {
-        item: $currentElem && $currentElem.next('.context_module_item:visible'),
-        fallbackModule:
-          $currentElem && $currentElem.parents('.context_module').next('.context_module')
-      }
-    }
-    const $elem = selectItem(params)
-    if ($elem.length) $currentElem = $elem
-  })
-
-  // "e" opens up Edit Module Settings form if focus is on Module or Edit Item Details form if focused on Module Item
-  // "d" deletes module or module item
-  // "space" opens up Move Item or Move Module form depending on which item is focused
-  $document.keycodes('e d space', event => {
-    if (!$currentElem) return
-
-    const $elem = getClosestModuleOrItem($currentElem)
-    const $hasClassItemHover = $elem.hasClass('context_module_item_hover')
-
-    if (event.keyString == 'e') {
-      $hasClassItemHover
-        ? $currentElem.find('.edit_item_link:first').click()
-        : $currentElem.find('.edit_module_link:first').click()
-    } else if (event.keyString == 'd') {
-      if ($hasClassItemHover) {
-        $currentElem.find('.delete_item_link:first').click()
-        $currentElem = $currentElem.parents('.context_module')
-      } else {
-        $currentElem.find('.delete_module_link:first').click()
-        $currentElem = null
-      }
-    } else if (event.keyString == 'space') {
-      $hasClassItemHover
-        ? $currentElem.find('.move_module_item_link:first').click()
-        : $currentElem.find('.move_module_link:first').click()
-    }
-
-    event.preventDefault()
-  })
-
-  // "n" opens up the Add Module form
-  $document.keycodes('n', event => {
-    $('.add_module_link:visible:first').click()
-    event.preventDefault()
-  })
-
-  // "i" indents module item
-  // "o" outdents module item
-  $document.keycodes('i o', event => {
-    if (!$currentElem) return
-
-    const $currentElemID = $currentElem.attr('id')
-
-    if (event.keyString == 'i') {
-      $currentElem
-        .find('.indent_item_link:first')
-        .trigger('click', [$currentElem, document.activeElement])
-    } else if (event.keyString == 'o') {
-      $currentElem
-        .find('.outdent_item_link:first')
-        .trigger('click', [$currentElem, document.activeElement])
-    }
-
-    $document.ajaxStop(() => {
-      $currentElem = $('#' + $currentElemID)
+      const $elem = selectItem(params)
+      if ($elem.length) $currentElem = $elem
     })
-  })
+
+    // "j" and "down arrow" move the focus down between modules and module items
+    $document.keycodes('j down', event => {
+      const params = {
+        selectWhenModuleFocused: {
+          item: $currentElem && $currentElem.find('.context_module_item:visible:first'),
+          fallbackModule: $currentElem && $currentElem.next('.context_module')
+        },
+        selectWhenModuleItemFocused: {
+          item: $currentElem && $currentElem.next('.context_module_item:visible'),
+          fallbackModule:
+            $currentElem && $currentElem.parents('.context_module').next('.context_module')
+        }
+      }
+      const $elem = selectItem(params)
+      if ($elem.length) $currentElem = $elem
+    })
+
+    // "e" opens up Edit Module Settings form if focus is on Module or Edit Item Details form if focused on Module Item
+    // "d" deletes module or module item
+    // "space" opens up Move Item or Move Module form depending on which item is focused
+    $document.keycodes('e d space', event => {
+      if (!$currentElem) return
+
+      const $elem = getClosestModuleOrItem($currentElem)
+      const $hasClassItemHover = $elem.hasClass('context_module_item_hover')
+
+      if (event.keyString == 'e') {
+        $hasClassItemHover
+          ? $currentElem.find('.edit_item_link:first').click()
+          : $currentElem.find('.edit_module_link:first').click()
+      } else if (event.keyString == 'd') {
+        if ($hasClassItemHover) {
+          $currentElem.find('.delete_item_link:first').click()
+          $currentElem = $currentElem.parents('.context_module')
+        } else {
+          $currentElem.find('.delete_module_link:first').click()
+          $currentElem = null
+        }
+      } else if (event.keyString == 'space') {
+        $hasClassItemHover
+          ? $currentElem.find('.move_module_item_link:first').click()
+          : $currentElem.find('.move_module_link:first').click()
+      }
+
+      event.preventDefault()
+    })
+
+    // "n" opens up the Add Module form
+    $document.keycodes('n', event => {
+      $('.add_module_link:visible:first').click()
+      event.preventDefault()
+    })
+
+    // "i" indents module item
+    // "o" outdents module item
+    $document.keycodes('i o', event => {
+      if (!$currentElem) return
+
+      const $currentElemID = $currentElem.attr('id')
+
+      if (event.keyString == 'i') {
+        $currentElem
+          .find('.indent_item_link:first')
+          .trigger('click', [$currentElem, document.activeElement])
+      } else if (event.keyString == 'o') {
+        $currentElem
+          .find('.outdent_item_link:first')
+          .trigger('click', [$currentElem, document.activeElement])
+      }
+
+      $document.ajaxStop(() => {
+        $currentElem = $('#' + $currentElemID)
+      })
+    })
+  }
 
   if ($('#context_modules').hasClass('editable')) {
     requestAnimationFrame(modules.initModuleManagement)
@@ -2708,7 +2632,9 @@ $(document).ready(function() {
         (!shouldExpand && $module.find('.content:visible').length > 0)
       ) {
         const callback = function() {
-          $module.find('.collapse_module_link').css('display', shouldExpand ? 'inline-block' : 'none')
+          $module
+            .find('.collapse_module_link')
+            .css('display', shouldExpand ? 'inline-block' : 'none')
           $module.find('.expand_module_link').css('display', shouldExpand ? 'none' : 'inline-block')
           $module.find('.footer .manage_module').css('display', '')
           $module.toggleClass('collapsed_module', shouldExpand)
@@ -2788,6 +2714,84 @@ $(document).ready(function() {
 
   $('.menu_tray_tool_link').click(openExternalTool)
   monitorLtiMessages()
+
+  function renderCopyToTray(open, contentSelection, returnFocusTo) {
+    ReactDOM.render(
+      <DirectShareCourseTray
+        open={open}
+        sourceCourseId={ENV.COURSE_ID}
+        contentSelection={contentSelection}
+        onDismiss={() => {
+          renderCopyToTray(false, contentSelection, returnFocusTo)
+          returnFocusTo.focus()
+        }}
+      />,
+      document.getElementById('direct-share-mount-point')
+    )
+  }
+
+  function renderSendToTray(open, contentSelection, returnFocusTo) {
+    ReactDOM.render(
+      <DirectShareUserModal
+        open={open}
+        sourceCourseId={ENV.COURSE_ID}
+        contentShare={contentSelection}
+        onDismiss={() => {
+          renderSendToTray(false, contentSelection, returnFocusTo)
+          returnFocusTo.focus()
+        }}
+      />,
+      document.getElementById('direct-share-mount-point')
+    )
+  }
+
+  $('.module_copy_to').live('click', event => {
+    event.preventDefault()
+    const moduleId = $(event.target)
+      .closest('.context_module')
+      .data('module-id')
+      .toString()
+    const selection = {modules: [moduleId]}
+    const returnFocusTo = $(event.target)
+      .closest('ul')
+      .prev('.al-trigger')
+    renderCopyToTray(true, selection, returnFocusTo)
+  })
+
+  $('.module_send_to').live('click', event => {
+    event.preventDefault()
+    const moduleId = $(event.target)
+      .closest('.context_module')
+      .data('module-id')
+      .toString()
+    const selection = {content_type: 'module', content_id: moduleId}
+    const returnFocusTo = $(event.target)
+      .closest('ul')
+      .prev('.al-trigger')
+    renderSendToTray(true, selection, returnFocusTo)
+  })
+
+  $('.module_item_copy_to').live('click', event => {
+    event.preventDefault()
+    const select_id = $(event.target).data('select-id')
+    const select_class = $(event.target).data('select-class')
+    const selection = {[select_class]: [select_id]}
+    const returnFocusTo = $(event.target)
+      .closest('ul')
+      .prev('.al-trigger')
+    renderCopyToTray(true, selection, returnFocusTo)
+  })
+
+  $('.module_item_send_to').live('click', event => {
+    event.preventDefault()
+    const content_id = $(event.target).data('content-id')
+    const content_type = $(event.target).data('content-type')
+    const selection = {content_id, content_type}
+    const returnFocusTo = $(event.target)
+      .closest('ul')
+      .prev('.al-trigger')
+    renderSendToTray(true, selection, returnFocusTo)
+  })
 })
 
 export default modules

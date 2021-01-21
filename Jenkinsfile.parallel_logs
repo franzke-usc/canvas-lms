@@ -39,6 +39,10 @@ def ignoreBuildNeverStartedError(block) {
   }
 }
 
+def getMigrationsTag(name) {
+  (env.GERRIT_REFSPEC.contains('master')) || !migrations.cacheLoadFailed() ? migrations.imageMergeTag(name) : migrations.imagePatchsetTag(name)
+}
+
 def getPatchsetTag() {
   (env.GERRIT_REFSPEC.contains('master')) ? "${configuration.buildRegistryPath()}:${env.GERRIT_BRANCH}" : imageTag.patchset()
 }
@@ -58,9 +62,16 @@ pipeline {
     // e.g. canvas-lms:01.123456.78-postgres-12-ruby-2.6
     PATCHSET_TAG = getPatchsetTag()
 
-    CASSANDRA_IMAGE_TAG=imageTag.cassandra()
-    DYNAMODB_IMAGE_TAG=imageTag.dynamodb()
-    POSTGRES_IMAGE_TAG=imageTag.postgres()
+    CASSANDRA_PREFIX = configuration.buildRegistryPath('cassandra-migrations')
+    DYNAMODB_PREFIX = configuration.buildRegistryPath('dynamodb-migrations')
+    POSTGRES_PREFIX = configuration.buildRegistryPath('postgres-migrations')
+
+    IMAGE_CACHE_MERGE_SCOPE = configuration.gerritBranchSanitized()
+    RSPEC_PROCESSES = 4
+
+    CASSANDRA_IMAGE_TAG = "$CASSANDRA_PREFIX:$IMAGE_CACHE_MERGE_SCOPE-$RSPEC_PROCESSES"
+    DYNAMODB_IMAGE_TAG = "$DYNAMODB_PREFIX:$IMAGE_CACHE_MERGE_SCOPE-$RSPEC_PROCESSES"
+    POSTGRES_IMAGE_TAG = "$POSTGRES_PREFIX:$IMAGE_CACHE_MERGE_SCOPE-$RSPEC_PROCESSES"
   }
 
   stages {
@@ -74,12 +85,13 @@ pipeline {
       steps {
         script {
           def stages = [:]
-
           def distribution = load 'build/new-jenkins/groovy/distribution.groovy'
+
           distribution.stashBuildScripts()
 
           distribution.addRSpecSuites(stages)
           distribution.addSeleniumSuites(stages)
+
           parallel(stages)
         }
       }
@@ -109,17 +121,17 @@ pipeline {
     always {
       script {
         ignoreBuildNeverStartedError {
-          def rspec = load 'build/new-jenkins/groovy/rspec.groovy'
-          rspec.uploadJunitReports()
-          rspec.uploadSeleniumFailures()
-          rspec.uploadRSpecFailures()
-          load('build/new-jenkins/groovy/reports.groovy').sendFailureMessageIfPresent()
+          failureReport.publishReportFromArtifacts('Rspec Test Failures', "tmp/spec_failures/rspec/**/*")
+          failureReport.publishReportFromArtifacts('Selenium Test Failures', "tmp/spec_failures/selenium/**/*")
+          failureReport.submit()
         }
       }
     }
     cleanup {
-      ignoreBuildNeverStartedError {
-        execute 'bash/docker-cleanup.sh --allow-failure'
+      script {
+        ignoreBuildNeverStartedError {
+          libraryScript.execute 'bash/docker-cleanup.sh --allow-failure'
+        }
       }
     }
   }

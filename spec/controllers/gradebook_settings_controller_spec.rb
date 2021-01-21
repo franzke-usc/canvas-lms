@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2016 - present Instructure, Inc.
 #
@@ -50,6 +52,7 @@ RSpec.describe GradebookSettingsController, type: :controller do
           "sort_rows_by_column_id" => "student",
           "sort_rows_by_setting_key" => "sortable_name",
           "sort_rows_by_direction" => "descending",
+          "view_ungraded_as_zero" => "true",
           "colors" => {
             "late" => "#000000",
             "missing" => "#000001",
@@ -96,8 +99,9 @@ RSpec.describe GradebookSettingsController, type: :controller do
         it { is_expected.to include 'sort_rows_by_column_id' => 'student' }
         it { is_expected.to include 'sort_rows_by_setting_key' => 'sortable_name' }
         it { is_expected.to include 'sort_rows_by_direction' => 'descending' }
+        it { is_expected.to include 'view_ungraded_as_zero' => 'true' }
         it { is_expected.not_to include 'colors' }
-        it { is_expected.to have(12).items } # ensure we add specs for new additions
+        it { is_expected.to have(13).items } # ensure we add specs for new additions
 
         context 'colors' do
           subject { json_parse.fetch('gradebook_settings').fetch('colors') }
@@ -178,6 +182,23 @@ RSpec.describe GradebookSettingsController, type: :controller do
         it "does not store invalid status colors" do
           colors = json_parse.fetch("gradebook_settings").fetch("colors")
           expect(colors).not_to have_key "missing"
+        end
+      end
+
+      describe "view ungraded as zero" do
+        it "records that the user has accepted the confirmation dialog if set to true" do
+          put :update, params: valid_params
+          expect(teacher.get_preference(:gradebook_settings, :accepted_view_ungraded_as_zero_dialog)).to eq "true"
+        end
+
+        it "does not record acceptance of the confirmation dialog if set to false" do
+          params = {
+            "course_id" => @course.id,
+            "gradebook_settings" => gradebook_settings.merge("view_ungraded_as_zero" => "false")
+          }
+          put :update, params: params
+
+          expect(teacher.get_preference(:gradebook_settings, :accepted_view_ungraded_as_zero_dialog)).to be nil
         end
       end
     end

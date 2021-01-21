@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -19,10 +21,6 @@ require_relative '../common'
 
 describe "global announcements" do
   include_context "in-process server selenium tests"
-
-  before :once do
-    Account.default.enable_feature!(:past_announcements)
-  end
 
   before :each do
     course_with_student_logged_in

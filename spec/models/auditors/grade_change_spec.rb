@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2013 - present Instructure, Inc.
 #
@@ -20,6 +22,9 @@ require File.expand_path(File.dirname(__FILE__) + '/../../sharding_spec_helper.r
 require File.expand_path(File.dirname(__FILE__) + '/../../cassandra_spec_helper')
 
 describe Auditors::GradeChange do
+  before(:all) do
+    Auditors::ActiveRecord::Partitioner.process
+  end
 
   let(:request_id) { 42 }
 
@@ -330,7 +335,9 @@ describe Auditors::GradeChange do
       )
     end
 
-    let(:course_grade_changes) { Auditors::GradeChange.for_course(@course).paginate(per_page: 10) }
+    def course_grade_changes(course)
+      Auditors::GradeChange.for_course(course).paginate(per_page: 10)
+    end
 
     before do
       allow(Auditors).to receive(:config).and_return({'write_paths' => ['active_record'], 'read_path' => 'active_record'})
@@ -353,24 +360,22 @@ describe Auditors::GradeChange do
     end
 
     it "returns submission grade changes in results" do
+      expect(course_grade_changes(@course).length).to eq 1
       Auditors::GradeChange.record(submission: @submission)
-
       aggregate_failures do
-        expect(course_grade_changes.length).to eq 1
-        expect(course_grade_changes.first.submission_id).to eq @submission.id
+        cgc = course_grade_changes(@course)
+        expect(cgc.length).to eq 2
+        expect(cgc.last.submission_id).to eq @submission.id
       end
     end
 
-    it "does not return override grade changes in results" do
+    it "returns override grade changes in results" do
+      expect(course_grade_changes(@course).count).to eq 1
       Auditors::GradeChange.record(override_grade_change: override_grade_change)
-
-      expect(course_grade_changes).to be_empty
+      expect(course_grade_changes(@course).count).to eq 2
     end
 
-    it "nevertheless stores override grade changes in the database" do
-      # TODO: (EVAL-1068) this is just a temporary sanity check, remove it (and
-      # modify the preceding test) once we enable returning override grade
-      # changes via the methods in Auditors::GradeChange
+    it "stores override grade changes in the database" do
       expect {
         Auditors::GradeChange.record(override_grade_change: override_grade_change)
       }.to change {
@@ -379,6 +384,51 @@ describe Auditors::GradeChange do
           context_type: "Course"
         ).count
       }.by(1)
+    end
+
+    it "can restrict results to override grades" do
+      Auditors::GradeChange.record(submission: @submission)
+      Auditors::GradeChange.record(override_grade_change: override_grade_change)
+
+      records = Auditors::GradeChange.for_course_and_other_arguments(
+        @course,
+        {
+          assignment: Auditors::GradeChange::COURSE_OVERRIDE_ASSIGNMENT
+        }
+      ).paginate(per_page: 10)
+
+      aggregate_failures do
+        expect(records.length).to eq 1
+        expect(records.first).to be_override_grade
+      end
+    end
+
+    it "can return results restricted to override grades in combination with other filters" do
+      Auditors::GradeChange.record(submission: @submission)
+      Auditors::GradeChange.record(override_grade_change: override_grade_change)
+
+      other_teacher = @course.enroll_teacher(User.create!, workflow_state: "active").user
+      other_override = Auditors::GradeChange::OverrideGradeChange.new(
+        grader: other_teacher,
+        old_grade: nil,
+        old_score: nil,
+        score: @student.enrollments.first.find_score
+      )
+      Auditors::GradeChange.record(override_grade_change: other_override)
+
+      grade_changes = Auditors::GradeChange.for_course_and_other_arguments(
+        @course,
+        {
+          assignment: Auditors::GradeChange::COURSE_OVERRIDE_ASSIGNMENT,
+          grader: @teacher
+        }
+      ).paginate(per_page: 10)
+
+      aggregate_failures do
+        expect(grade_changes.length).to eq 1
+        expect(grade_changes.first).to be_override_grade
+        expect(grade_changes.first.grader).to eq @teacher
+      end
     end
 
     describe "grading period ID" do
@@ -405,6 +455,40 @@ describe Auditors::GradeChange do
         expect(Auditors::ActiveRecord::GradeChangeRecord.last.grading_period_id).to eq grading_period.id
       end
     end
+
+    describe ".filter_by_assignment" do
+      it "only changes the scope for nil assignment ids" do
+        attributes = {
+          assignment_id: @assignment.id,
+          account_id: @account.id,
+          root_account_id: @account.id,
+          student_id: @student.id,
+          context_id: @course.id,
+          context_type: 'Course',
+          excused_after: false,
+          excused_before: false,
+          event_type: 'grade'
+        }
+        r1 = Auditors::ActiveRecord::GradeChangeRecord.create!(attributes.merge({
+          uuid: 'asdf',
+          request_id: 'asdf'
+        }))
+        r2 = Auditors::ActiveRecord::GradeChangeRecord.create!(attributes.merge({
+          assignment_id: nil,
+          uuid: 'fdsa',
+          request_id: 'fdsa'
+        }))
+        scope1 = Auditors::ActiveRecord::GradeChangeRecord.where(assignment_id: @assignment.id)
+        scope2 = Auditors::ActiveRecord::GradeChangeRecord.where(assignment_id: Auditors::GradeChange::NULL_PLACEHOLDER)
+        scope1 = Auditors::GradeChange.filter_by_assignment(scope1)
+        scope2 = Auditors::GradeChange.filter_by_assignment(scope2)
+        expect(r2.reload.assignment_id).to be_nil
+        expect(scope1.pluck(:id)).to include(r1.id)
+        expect(scope1.pluck(:id)).to_not include(r2.id)
+        expect(scope2.pluck(:id)).to_not include(r1.id)
+        expect(scope2.pluck(:id)).to include(r2.id)
+      end
+    end
   end
 
   describe "with dual writing enabled to postgres" do
@@ -424,6 +508,41 @@ describe Auditors::GradeChange do
       pg_record = Auditors::ActiveRecord::GradeChangeRecord.where(uuid: event.id).first
       expect(pg_record).to_not be_nil
       expect(pg_record.submission_id).to eq(@submission.id)
+    end
+  end
+
+  describe ".return_override_grades?" do
+    it "returns true if the final_grade_override_in_gradebook_history flag is enabled" do
+      Account.site_admin.enable_feature!(:final_grade_override_in_gradebook_history)
+      expect(Auditors::GradeChange).to be_return_override_grades
+    end
+
+    it "returns false if the final_grade_override_in_gradebook_history flag is not enabled" do
+      expect(Auditors::GradeChange).not_to be_return_override_grades
+    end
+  end
+
+  describe Auditors::GradeChange::Record do
+    describe "#in_grading_period?" do
+      it "returns true if the record has a valid grading period" do
+        grading_period_group = @account.grading_period_groups.create!
+        now = Time.zone.now
+        grading_period = grading_period_group.grading_periods.create!(
+          close_date: 1.week.from_now(now),
+          end_date: 1.week.from_now(now),
+          start_date: 1.week.ago(now),
+          title: "a"
+        )
+
+        @submission.update!(grading_period: grading_period)
+        event = Auditors::GradeChange.record(submission: @submission)
+        expect(event).to be_in_grading_period
+      end
+
+      it "returns false if the record does not have a valid grading period" do
+        event = Auditors::GradeChange.record(submission: @submission)
+        expect(event).not_to be_in_grading_period
+      end
     end
   end
 end

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2020 - present Instructure, Inc.
 #
@@ -94,8 +96,8 @@ describe Auditors::ActiveRecord::GradeChangeRecord do
       end
 
       let(:ar_override_grade_change) do
-        override_record = Auditors::GradeChange.record(override_grade_change: override_grade_change)
-        Auditors::ActiveRecord::GradeChangeRecord.create_from_event_stream!(override_record)
+        Auditors::GradeChange.record(override_grade_change: override_grade_change)
+        Auditors::ActiveRecord::GradeChangeRecord.last
       end
 
       let(:ar_assignment_grade_change) do
@@ -122,6 +124,21 @@ describe Auditors::ActiveRecord::GradeChangeRecord do
         it "is set to null if the event stream record contains the placeholder value" do
           expect(ar_override_grade_change.assignment_id).to be nil
         end
+      end
+    end
+
+    describe "#in_grading_period?" do
+      let(:ar_assignment_grade_change) do
+        Auditors::ActiveRecord::GradeChangeRecord.create_from_event_stream!(es_record)
+      end
+
+      it "returns true if the record has a valid grading period" do
+        submission_record.update!(grading_period: grading_period)
+        expect(ar_assignment_grade_change).to be_in_grading_period
+      end
+
+      it "returns false if the record does not have a valid grading period" do
+        expect(ar_assignment_grade_change).not_to be_in_grading_period
       end
     end
   end

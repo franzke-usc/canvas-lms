@@ -1,5 +1,5 @@
-# encoding: utf-8
-#
+# frozen_string_literal: true
+
 # Copyright (C) 2012 - present Instructure, Inc.
 #
 # This file is part of Canvas.
@@ -175,7 +175,7 @@ describe UserSearch do
           end
 
           it 'will not match against a sis id without :read_sis permission' do
-            RoleOverride.create!(context: Account.default, role: Role.get_built_in_role('TeacherEnrollment'),
+            RoleOverride.create!(context: Account.default, role: teacher_role,
               permission: 'read_sis', enabled: false)
             expect(UserSearch.for_user_in_context("SOME_SIS", course, user)).to eq []
           end
@@ -188,12 +188,18 @@ describe UserSearch do
             expect(UserSearch.for_user_in_context(user2.id.to_s, course, user)).to eq [user, user2]
           end
 
+          it 'handles search terms out of bounds for max bigint' do
+            pseudonym.sis_user_id = '9223372036854775808'
+            pseudonym.save!
+            expect(UserSearch.for_user_in_context('9223372036854775808', course, user)).to eq [user]
+          end
+
           it 'will match against a login id' do
             expect(UserSearch.for_user_in_context("UNIQUE_ID", course, user)).to eq [user]
           end
 
           it 'will not search login id without permission' do
-            RoleOverride.create!(context: Account.default, role: Role.get_built_in_role('TeacherEnrollment'),
+            RoleOverride.create!(context: Account.default, role: teacher_role,
               permission: 'view_user_logins', enabled: false)
             expect(UserSearch.for_user_in_context("UNIQUE_ID", course, user)).to eq []
           end
@@ -243,7 +249,7 @@ describe UserSearch do
           end
 
           it 'requires :read_email_addresses permission' do
-            RoleOverride.create!(context: Account.default, role: Role.get_built_in_role('TeacherEnrollment'),
+            RoleOverride.create!(context: Account.default, role: teacher_role,
               permission: 'read_email_addresses', enabled: false)
             expect(UserSearch.for_user_in_context("the.giver", course, user)).to eq []
           end

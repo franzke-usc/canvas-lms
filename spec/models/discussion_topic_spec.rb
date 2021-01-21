@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -165,6 +167,28 @@ describe DiscussionTopic do
       )
 
       expect(values).to eq([true] * values.length)
+    end
+  end
+
+  describe 'default values' do
+    subject(:discussion_topic) { @course.discussion_topics.create!(title: title) }
+    
+    let(:default_title) { I18n.t('#discussion_topic.default_title', "No Title") }
+     
+    context 'when the title is an empty string' do
+      let(:title) { '' }
+
+      it 'sets its default value' do
+        expect(discussion_topic.title).to eq(default_title)
+      end
+    end
+
+    context 'when the title is nil' do
+      let(:title) { nil }
+
+      it 'sets its default value' do
+        expect(discussion_topic.title).to eq(default_title)
+      end
     end
   end
 

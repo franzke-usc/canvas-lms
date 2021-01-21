@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2020 - present Instructure, Inc.
 #
@@ -27,8 +29,11 @@ RSpec.describe 'Outcomes Service - POST Content Import', :pact do
       {
         host: outcomes_host.split(':').first,
         consumer_key: outcomes_key,
-        scope: 'content_imports.create',
-        exp: 100.years.from_now.to_i
+        scope: 'content_migration.import',
+        exp: 100.years.from_now.to_i,
+        context_type: 'course',
+        context_id: '100',
+        id: '*'
       }
     end
     let(:import_post_token) { JSON::JWT.new(import_post_payload).sign(outcomes_secret, :HS512) }

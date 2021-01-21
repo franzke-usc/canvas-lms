@@ -16,7 +16,7 @@ ENV YARN_VERSION 1.19.1-1
 
 USER root
 WORKDIR /root
-RUN curl -sL https://deb.nodesource.com/setup_10.x | bash - \
+RUN curl -sL https://deb.nodesource.com/setup_12.x | bash - \
   && curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | apt-key add - \
   && echo "deb https://dl.yarnpkg.com/debian/ stable main" > /etc/apt/sources.list.d/yarn.list \
   && printf 'path-exclude /usr/share/doc/*\npath-exclude /usr/share/man/*' > /etc/dpkg/dpkg.cfg.d/01_nodoc \
@@ -72,9 +72,6 @@ COPY --chown=docker:docker . $APP_HOME
 RUN mkdir -p .yardoc \
              app/stylesheets/brandable_css_brands \
              app/views/info \
-             client_apps/canvas_quizzes/dist \
-             client_apps/canvas_quizzes/node_modules \
-             client_apps/canvas_quizzes/tmp \
              config/locales/generated \
              gems/canvas_i18nliner/node_modules \
              log \
@@ -98,7 +95,6 @@ RUN mkdir -p .yardoc \
              pacts \
              public/dist \
              public/doc/api \
-             public/javascripts/client_apps \
              public/javascripts/compiled \
              public/javascripts/translations \
              reports \

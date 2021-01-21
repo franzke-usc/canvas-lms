@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - 2014 Instructure, Inc.
 #
@@ -794,7 +796,8 @@ describe CoursesController, type: :request do
           'sis_import_id' => nil,
           'workflow_state' => 'available',
           'default_view' => 'modules',
-          'storage_quota_mb' => @account.default_storage_quota_mb
+          'storage_quota_mb' => @account.default_storage_quota_mb,
+          'homeroom_course' => false
         })
         expect(Auditors::Course).to receive(:record_created).once
         json = api_call(:post, @resource_path, @resource_params, post_params)
@@ -874,7 +877,8 @@ describe CoursesController, type: :request do
           'created_at' => new_course.created_at.as_json,
           'calendar' => { 'ics' => "http://www.example.com/feeds/calendars/course_#{new_course.uuid}.ics" },
           'uuid' => new_course.uuid,
-          'blueprint' => false
+          'blueprint' => false,
+          'homeroom_course' => false
         )
         expect(json).to eql course_response
       end
@@ -3446,6 +3450,7 @@ describe CoursesController, type: :request do
         'enrollment_term_id' => @course.enrollment_term_id,
         'restrict_enrollments_to_course_dates' => false,
         'time_zone' => 'America/Los_Angeles',
+        'homeroom_course' => false,
         'uuid' => @course1.uuid,
         'blueprint' => false,
         'license' => nil
@@ -3581,8 +3586,9 @@ describe CoursesController, type: :request do
       end
 
       it "should 404 for bad account id" do
-        json = api_call(:get, "/api/v1/accounts/0/courses/#{@course.id}.json",
-                          {:controller => 'courses', :action => 'show', :id => @course.id.to_param, :format => 'json', :account_id => '0'},
+        bad_account_id = Account.last.id + 9999
+        json = api_call(:get, "/api/v1/accounts/#{bad_account_id}/courses/#{@course.id}.json",
+                          {:controller => 'courses', :action => 'show', :id => @course.id.to_param, :format => 'json', :account_id => bad_account_id.to_s},
                           {}, {}, :expected_status => 404)
       end
 
@@ -3725,6 +3731,7 @@ describe CoursesController, type: :request do
           'usage_rights_required' => false,
           'home_page_announcement_limit' => nil,
           'syllabus_course_summary' => true,
+          'homeroom_course' => false,
           'image_url' => nil,
           'image_id' => nil,
           'image' => nil
@@ -3758,7 +3765,8 @@ describe CoursesController, type: :request do
           :restrict_student_future_view => true,
           :show_announcements_on_home_page => false,
           :syllabus_course_summary => false,
-          :home_page_announcement_limit => nil
+          :home_page_announcement_limit => nil,
+          :homeroom_course => true
         })
         expect(json).to eq({
           'allow_final_grade_override' => true,
@@ -3780,6 +3788,7 @@ describe CoursesController, type: :request do
           'show_announcements_on_home_page' => false,
           'home_page_announcement_limit' => nil,
           'syllabus_course_summary' => false,
+          'homeroom_course' => true,
           'image_url' => nil,
           'image_id' => nil,
           'image' => nil
@@ -3798,6 +3807,7 @@ describe CoursesController, type: :request do
         expect(@course.show_announcements_on_home_page).to eq false
         expect(@course.syllabus_course_summary?).to eq false
         expect(@course.home_page_announcement_limit).to be nil
+        expect(@course.homeroom_course?).to eq true
       end
     end
 
@@ -3833,6 +3843,7 @@ describe CoursesController, type: :request do
           'usage_rights_required' => false,
           'home_page_announcement_limit' => nil,
           'syllabus_course_summary' => true,
+          'homeroom_course' => false,
           'image_url' => nil,
           'image_id' => nil,
           'image' => nil

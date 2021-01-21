@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2020 - present Instructure, Inc.
 #
@@ -115,6 +117,7 @@ module DataFixup::PopulateRootAccountIdOnModels
       Quizzes::QuizGroup => :quiz,
       Quizzes::QuizQuestion => :quiz,
       Quizzes::QuizSubmission => :quiz,
+      Quizzes::QuizSubmissionEvent => :quiz_submission,
       Role => :account,
       RoleOverride => :account,
       Rubric => :context,
@@ -176,12 +179,37 @@ module DataFixup::PopulateRootAccountIdOnModels
   end
 
   # In case we run into other tables that can't fully finish being filled with
-  # root account ids, and they have children who need them to consider them as full
+  # root account ids, and they have children who need them to consider them as full.
   def self.unfillable_criteria
+    # Arguments to where()
     @unfillable_criteria ||= {
       DeveloperKey => 'account_id IS NULL',
+    }.transform_values{ |criteria| [criteria].flatten(1) }.freeze
+  end
+
+  # A better alternative to the above, perhaps not possible in all cases, is to
+  # actually fill it with a dummy root_account of "0". This unlocks
+  # dependencies and simplifies our checking of what is done because the
+  # unfillable row is actually filled with a value.
+  # NOTE: also used in check_if_table_has_root_account() with where(root_account_id: nil)
+  # to check if table is unfilled; be aware of potential performance problems on this check
+  def self.fill_with_zeros_criteria
+    # Arguments to where()
+    @fill_with_zeros_criteria ||= {
+      CalendarEvent => {context_type: 'User', effective_context_code: nil},
       LearningOutcomeGroup => 'context_id IS NULL',
-    }.freeze
+      ContentMigration => {context_type: 'User'},
+    }.transform_values{ |criteria| [criteria].flatten(1) }.freeze
+  end
+
+  # These must be simple associations or specific polymorphic associations ("course" not "context")
+  # For non-=full table detection to work right, these should be associations already covered by
+  # `migration_tables` or `dependencies`. See also scope_for_association_does_not_exist.
+  # Multiple root account tables ("root_account_ids" not "root_account_id") not supported.
+  def self.nonexistent_associations_to_fill_with_zeros
+    @nonexistent_associations_to_fill_with_zeros ||= {
+      CalendarEvent => [:context_course, :context_group, :context_course_section],
+    }
   end
 
   def self.ignore_cross_shard_associations_tables
@@ -194,17 +222,23 @@ module DataFixup::PopulateRootAccountIdOnModels
   # tables that have been filled for a while already
   DONE_TABLES = [Account, Assignment, Course, CourseSection, Enrollment, EnrollmentDatesOverride, EnrollmentTerm, Group].freeze
 
+  def self.send_later_backfill_strand(job, *args)
+    delay_if_production(priority: Delayed::MAX_PRIORITY,
+      n_strand: ["root_account_id_backfill", Shard.current.database_server.id]).__send__(job, *args)
+  end
+
   def self.run
     clean_and_filter_tables.each do |table, assoc|
       table.find_ids_in_ranges(batch_size: 100_000) do |min, max|
         # default populate method
         unless assoc.empty?
-          self.send_later_if_production_enqueue_args(:populate_root_account_ids,
-          {
-            priority: Delayed::MAX_PRIORITY,
-            n_strand: ["root_account_id_backfill", Shard.current.database_server.id]
-          },
-          table, assoc, min, max)
+          send_later_backfill_strand(:populate_root_account_ids, table, assoc, min, max)
+        end
+        if fill_with_zeros_criteria.key?(table)
+          send_later_backfill_strand(:fill_with_zeros, table, min, max)
+        end
+        if nonexistent_associations_to_fill_with_zeros.key?(table)
+          send_later_backfill_strand(:fill_nonexistent_associations_with_zeros, table, min, max)
         end
 
         if populate_overrides.key?(table)
@@ -212,13 +246,7 @@ module DataFixup::PopulateRootAccountIdOnModels
           Array(populate_overrides[table]).each do |override_module|
             next unless override_module.respond_to?(:populate)
             next if table.where(get_column_name(table) => nil).none?
-
-            self.send_later_if_production_enqueue_args(:populate_root_account_ids_override,
-            {
-              priority: Delayed::MAX_PRIORITY,
-              n_strand: ["root_account_id_backfill", Shard.current.database_server.id]
-            },
-            table, override_module, min, max)
+            send_later_backfill_strand(:populate_root_account_ids_override, table, override_module, min, max)
           end
         end
       end
@@ -228,12 +256,7 @@ module DataFixup::PopulateRootAccountIdOnModels
           next unless override_module.respond_to?(:populate_table) &&
             override_module.respond_to?(:run_populate_table?)
           next unless override_module.run_populate_table?
-          self.send_later_if_production_enqueue_args(:populate_root_account_ids_override_table,
-           {
-             priority: Delayed::MAX_PRIORITY,
-             n_strand: ["root_account_id_backfill", Shard.current.database_server.id]
-           },
-           table, override_module)
+          send_later_backfill_strand(:populate_root_account_ids_override_table, table, override_module)
         end
       end
 
@@ -269,6 +292,10 @@ module DataFixup::PopulateRootAccountIdOnModels
           true
         elsif incomplete_tables.include?(class_name) || tables_in_progress.include?(class_name)
           false
+        elsif table == CommunicationChannel
+          # For single-sharded (OSS) Canvas, if any users have been filled in
+          # and User jobs are complete, we are good to fill in comm channels
+          User.where.not(root_account_ids: nil).any?
         else
           check_if_association_has_root_account(table, assoc_reflection) ? complete_tables << table && true : incomplete_tables << table && false
         end
@@ -280,8 +307,8 @@ module DataFixup::PopulateRootAccountIdOnModels
   def self.in_progress_tables
     Delayed::Job.where(strand: "root_account_id_backfill/#{Shard.current.database_server.id}",
       shard_id: Shard.current).map do |job|
-        job.payload_object.try(:args)&.first
-    end.uniq.compact
+        job.payload_object&.args&.first
+      end.uniq.compact
   end
 
   def self.hash_association(association)
@@ -356,7 +383,7 @@ module DataFixup::PopulateRootAccountIdOnModels
     return false if table.column_names.exclude?(get_column_name(table))
     return empty_root_account_column_scope(table).none? if associations.blank? || dependencies.key?(table)
 
-    associations.all? do |a|
+    return false unless associations.all? do |a|
       reflection = table.reflections[a.to_s]
       scope = empty_root_account_column_scope(table)
 
@@ -380,6 +407,13 @@ module DataFixup::PopulateRootAccountIdOnModels
       # are there any nil root account ids?
       scope.none?
     end
+
+    # These rows can be filled with zeros. If they aren't filled, the table isn't filled
+    if (zeros_criteria = fill_with_zeros_criteria[table])
+      return false if empty_root_account_column_scope(table).where(*zeros_criteria).any?
+    end
+
+    true
   end
 
   # An association may have foreign keys for records on other shards, and to
@@ -410,7 +444,7 @@ module DataFixup::PopulateRootAccountIdOnModels
 
   def self.empty_root_account_column_scope(table)
     if unfillable_criteria[table]
-      table = table.where.not(*Array(unfillable_criteria[table]))
+      table = table.where.not(*unfillable_criteria[table])
     end
 
     if multiple_root_account_ids_tables.include?(table)
@@ -448,6 +482,50 @@ module DataFixup::PopulateRootAccountIdOnModels
     end
 
     unlock_next_backfill_job(table)
+  end
+
+  def self.fill_with_zeros(table, min, max)
+    if (criteria = fill_with_zeros_criteria[table])
+      table.find_ids_in_ranges(start_at: min, end_at: max) do |batch_min, batch_max|
+        table.
+          where(table.primary_key => batch_min..batch_max).
+          where(root_account_id: nil).
+          where(*criteria).
+          update_all('root_account_id = 0')
+      end
+    end
+  end
+
+  # Returns a scope for records in the table where the foreign record doesn't exist.
+  # Assoc can be a simple association, or a specific polymorphic association
+  # (e.g. "course" where "context" is a polymorphic association that includes
+  # source). It cannot be a general polymorphic association ("context")
+  def self.scope_for_association_does_not_exist(table, assoc)
+    reflection = table.reflections[assoc.to_s]
+    join_keys = reflection.join_keys
+    foreign_table = reflection.options[:class_name].constantize
+
+    # Polymorphic associations: add scope, e.g. "context_type = Course":
+    scope = reflection.scope ? table.class_eval(&reflection.scope) : table
+    # cross-shard could actually exist so ignore:
+    scope = scope.where("#{join_keys.foreign_key} < #{Shard::IDS_PER_SHARD}")
+
+    scope.where("NOT EXISTS (?)", foreign_table.where(
+      "#{foreign_table.quoted_table_name}.#{join_keys.key}=#{table.quoted_table_name}.#{join_keys.foreign_key}"
+    ))
+  end
+
+  def self.fill_nonexistent_associations_with_zeros(table, min, max)
+    assoc_names = nonexistent_associations_to_fill_with_zeros[table] or return
+    return unless assoc_names
+    table.find_ids_in_ranges(start_at: min, end_at: max) do |batch_min, batch_max|
+      assoc_names.each do |assoc_name|
+        scope_for_association_does_not_exist(table, assoc_name).
+          where(id: batch_min..batch_max).
+          where(root_account_id: nil).
+          update_all('root_account_id = 0')
+      end
+    end
   end
 
   def self.populate_root_account_ids_override(table, override_module, min, max)
@@ -504,10 +582,8 @@ module DataFixup::PopulateRootAccountIdOnModels
     # when the current table has been fully backfilled, restart the backfill job
     # so it can check to see if any new tables can begin working based off of this table
     if empty_root_account_column_scope(table).none?
-      self.send_later_if_production_enqueue_args(:run, {
-        priority: Delayed::LOWER_PRIORITY,
-        singleton: "root_account_id_backfill_strand_#{Shard.current.id}"
-      })
+      delay_if_production(priority: Delayed::LOWER_PRIORITY,
+        singleton: "root_account_id_backfill_strand_#{Shard.current.id}").run
     end
   end
 end

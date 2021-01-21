@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2011 - present Instructure, Inc.
 #
@@ -19,6 +21,9 @@
 require File.expand_path(File.dirname(__FILE__) + '/../spec_helper.rb')
 
 describe CalendarEvent do
+  before(:once) do
+    Account.find_or_create_by!(id: 0).update(name: 'Dummy Root Account', workflow_state: 'deleted', root_account_id: nil)
+  end
 
   it "should sanitize description" do
     course_model
@@ -311,10 +316,17 @@ describe CalendarEvent do
       expect(appointment.root_account_id).to eq course.root_account_id
     end
 
-    it 'should set the root_acocunt when the context is a user' do
+    it 'should set the root_account when the context is a user if the effective context is set and is not a user' do
+      user = User.create!
+      course = Course.create!
+      appointment = CalendarEvent.create!(title: 'test', context: user, effective_context_code: course.asset_string)
+      expect(appointment.root_account_id).to eq course.root_account_id
+    end
+
+    it 'should set the root_account_id to 0 when the context is a user and there is no effective context' do
       user = User.create!
       appointment = CalendarEvent.create!(title: 'test', context: user)
-      expect(appointment.root_account_id).to eq user.account.id
+      expect(appointment.root_account_id).to eq 0
     end
 
     it 'should set the root_account when the context is a group' do
@@ -540,8 +552,22 @@ describe CalendarEvent do
         Message.where(notification_id: BroadcastPolicy.notification_finder.by_name(notification_name), user_id: @expected_users).pluck(:user_id).sort
       end
 
-      it "should notify all participants except the person reserving", priority: "1", test_id: 193149 do
+      it 'should include course_ids from appointment_groups' do
         reservation = @appointment2.reserve_for(@group, @student1)
+        expect(reservation.course_broadcast_data).to eql({root_account_id: @course.root_account_id, course_ids: [@course.id]})
+      end
+
+      it 'should include multiple course_ids' do
+        course2 = @course.root_account.courses.create!(name: 'course2', workflow_state: 'available')
+        course2.enroll_teacher(@teacher).accept!
+        ag = AppointmentGroup.create!(title: "test", contexts: [@course, course2])
+        appointment = ag.appointments.create!(start_at: '2012-01-01 12:00:00', end_at: '2012-01-01 13:00:00')
+        reservation = appointment.reserve_for(@student1, @student1)
+        expect(reservation.course_broadcast_data).to eql({root_account_id: @course.root_account_id, course_ids: [@course.id, course2.id]})
+      end
+
+      it "should notify all participants except the person reserving", priority: "1", test_id: 193149 do
+        @appointment2.reserve_for(@group, @student1)
         expect(message_recipients_for('Appointment Reserved For User')).to eq @expected_users - [@student1.id, @teacher.id]
       end
 
@@ -878,6 +904,17 @@ describe CalendarEvent do
       expect(child.reload).to be_deleted
     end
 
+    it "deletes the parent event after the last child event is deleted" do
+      calendar_event_model
+      sec2 = @course.course_sections.create! name: 'sec2'
+      child1 = @event.child_events.create! context: @course.default_section, start_at: 1.day.from_now
+      child2 = @event.child_events.create! context: sec2, start_at: 2.days.from_now
+      child1.destroy
+      expect(@event.reload).to be_active
+      child2.destroy
+      expect(@event.reload).to be_deleted
+    end
+
     context "bulk updating" do
       before :once do
         course_with_teacher
@@ -995,6 +1032,27 @@ describe CalendarEvent do
         e1.reload
         e1.update :remove_child_events => true
         expect(e1.child_events.reload).to be_empty
+      end
+
+      it "unsets all_day when deleting child events" do
+        s2 = @course.course_sections.create!
+        e1 = @course.calendar_events.create!({
+          title: 'foo',
+          start_at: "2020-10-29T00:00:00.000Z",
+          end_at: "2020-10-29T00:00:00.000Z",
+          updating_user: @user,
+          child_event_data: [
+            { start_at: "2020-10-27T10:00:00.000Z", end_at: "2020-10-27T11:00:00.000Z", context_code: @course.default_section.asset_string},
+            { start_at: "2020-10-27T14:00:00.000Z", end_at: "2020-10-27T15:00:00.000Z", context_code: s2.asset_string}
+          ]
+        })
+        e1 = CalendarEvent.find(e1.id)
+        e1.update({
+          start_at: "2020-10-27T10:00:00.000Z",
+          end_at: "2020-10-27T15:00:00.000Z",
+          remove_child_events: true
+        })
+        expect(e1.reload).not_to be_all_day
       end
     end
 

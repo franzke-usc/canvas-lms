@@ -20,64 +20,38 @@ import React from 'react'
 import {render, wait, fireEvent} from '@testing-library/react'
 import {MockedProvider} from '@apollo/react-testing'
 import moxios from 'moxios'
-import {OUTCOME_PROFICIENCY_QUERY, SET_OUTCOME_CALCULATION_METHOD} from '../api'
+import {ACCOUNT_OUTCOME_PROFICIENCY_QUERY} from '../api'
 import MasteryScale from '../index'
+import {masteryScalesGraphqlMocks as mocks} from '../../__tests__/mocks'
 
 describe('MasteryScale', () => {
-  const mocks = [
-    {
-      request: {
-        query: OUTCOME_PROFICIENCY_QUERY,
-        variables: {
-          contextId: '11'
+  beforeEach(() => {
+    window.ENV = {
+      PROFICIENCY_SCALES_ENABLED_ROLES: [
+        {
+          id: '1',
+          role: 'AccountAdmin',
+          label: 'Account Admin',
+          base_role_type: 'AccountMembership',
+          is_account_role: true
+        },
+        {
+          id: '2',
+          role: 'TeacherEnrollment',
+          label: 'Teacher',
+          base_role_type: 'TeacherEnrollment',
+          is_account_role: false
         }
-      },
-      result: {
-        data: {
-          account: {
-            __typename: 'Account',
-            outcomeCalculationMethod: {
-              __typename: 'OutcomeCalculationMethod',
-              _id: '1',
-              contextType: 'Account',
-              contextId: 1,
-              calculationMethod: 'decaying_average',
-              calculationInt: 65,
-              locked: false
-            },
-            outcomeProficiency: {
-              __typename: 'OutcomeProficiency',
-              _id: '1',
-              contextId: 1,
-              contextType: 'Account',
-              locked: false,
-              proficiencyRatingsConnection: {
-                __typename: 'ProficiencyRatingConnection',
-                nodes: [
-                  {
-                    __typename: 'ProficiencyRating',
-                    _id: '2',
-                    color: '009606',
-                    description: 'Rating A',
-                    mastery: false,
-                    points: 9
-                  },
-                  {
-                    __typename: 'ProficiencyRating',
-                    _id: '6',
-                    color: 'EF4437',
-                    description: 'Rating B',
-                    mastery: false,
-                    points: 6
-                  }
-                ]
-              }
-            }
-          }
-        }
+      ],
+      PERMISSIONS: {
+        manage_proficiency_scales: true
       }
     }
-  ]
+  })
+
+  afterEach(() => {
+    window.ENV = null
+  })
 
   it('loads proficiency data', async () => {
     const {getByText, getByDisplayValue} = render(
@@ -88,6 +62,35 @@ describe('MasteryScale', () => {
     expect(getByText('Loading')).not.toEqual(null)
     await wait()
     expect(getByDisplayValue(/Rating A/)).not.toEqual(null)
+  })
+
+  it('loads proficiency data to Course', async () => {
+    const {getByText, getByDisplayValue} = render(
+      <MockedProvider mocks={mocks}>
+        <MasteryScale contextType="Course" contextId="12" />
+      </MockedProvider>
+    )
+    expect(getByText('Loading')).not.toEqual(null)
+    await wait()
+    expect(getByDisplayValue(/Rating A/)).not.toEqual(null)
+  })
+
+  it('loads role list', async () => {
+    const {getByText, getAllByText} = render(
+      <MockedProvider mocks={mocks}>
+        <MasteryScale contextType="Account" contextId="11" />
+      </MockedProvider>
+    )
+    expect(getByText('Loading')).not.toEqual(null)
+    await wait()
+    expect(
+      getByText(/Permission to change this mastery scale at the account level is enabled for/)
+    ).not.toEqual(null)
+    expect(
+      getByText(/Permission to change this mastery scale at the course level is enabled for/)
+    ).not.toEqual(null)
+    expect(getAllByText(/Account Admin/).length).not.toBe(0)
+    expect(getByText(/Teacher/)).not.toEqual(null)
   })
 
   it('displays an error on failed request', async () => {
@@ -104,16 +107,15 @@ describe('MasteryScale', () => {
     const emptyMocks = [
       {
         request: {
-          query: OUTCOME_PROFICIENCY_QUERY,
+          query: ACCOUNT_OUTCOME_PROFICIENCY_QUERY,
           variables: {
             contextId: '11'
           }
         },
         result: {
           data: {
-            account: {
+            context: {
               __typename: 'Account',
-              outcomeCalculationMethod: null,
               outcomeProficiency: null
             }
           }
@@ -126,8 +128,7 @@ describe('MasteryScale', () => {
       </MockedProvider>
     )
     await wait()
-    expect(getByText('Proficiency Rating')).not.toBeNull()
-    expect(getByText('Proficiency Calculation')).not.toBeNull()
+    expect(getByText('Mastery')).not.toBeNull()
   })
 
   describe('update outcomeProficiency', () => {
@@ -138,14 +139,16 @@ describe('MasteryScale', () => {
       moxios.uninstall()
     })
 
-    it('submits a request when ratings are updated', async () => {
-      const {findAllByLabelText} = render(
+    it('submits a request when ratings are saved', async () => {
+      const {findAllByLabelText, getByText} = render(
         <MockedProvider mocks={mocks}>
           <MasteryScale contextType="Account" contextId="11" />
         </MockedProvider>
       )
       const pointsInput = (await findAllByLabelText(/Change points/))[0]
       fireEvent.change(pointsInput, {target: {value: '100'}})
+      fireEvent.click(getByText('Save Mastery Scale'))
+      fireEvent.click(getByText('Save'))
 
       await wait(() => {
         const request = moxios.requests.mostRecent()
@@ -155,45 +158,30 @@ describe('MasteryScale', () => {
     })
   })
 
-  describe('update outcomeCalculationMethod', () => {
-    const variables = {
-      contextType: 'Account',
-      contextId: '11',
-      calculationMethod: 'decaying_average',
-      calculationInt: 88
-    }
-    const updateCall = jest.fn(() => ({
-      data: {
-        createOutcomeCalculationMethod: {
-          outcomeCalculationMethod: {
-            _id: '1',
-            locked: false,
-            ...variables
-          },
-          errors: []
-        }
+  describe('can not manage', () => {
+    beforeEach(() => {
+      window.ENV.PERMISSIONS = {
+        manage_proficiency_scales: false
       }
-    }))
-    const updateMocks = [
-      ...mocks,
-      {
-        request: {
-          query: SET_OUTCOME_CALCULATION_METHOD,
-          variables
-        },
-        result: updateCall
-      }
-    ]
-    it('submits a request when calculation method is updated', async () => {
-      const {findByLabelText} = render(
-        <MockedProvider mocks={updateMocks} addTypename={false}>
+    })
+
+    afterEach(() => {
+      window.ENV.PERMISSIONS = null
+    })
+
+    it('hides mastery info', async () => {
+      const {getByText, queryByText} = render(
+        <MockedProvider mocks={mocks}>
           <MasteryScale contextType="Account" contextId="11" />
         </MockedProvider>
       )
-      const parameter = await findByLabelText(/Parameter/)
-      fireEvent.input(parameter, {target: {value: '88'}})
-
-      await wait(() => expect(updateCall).toHaveBeenCalled())
+      expect(getByText('Loading')).not.toEqual(null)
+      await wait()
+      expect(
+        queryByText(
+          /This mastery scale will be used as the default for all courses within your account/
+        )
+      ).not.toBeInTheDocument()
     })
   })
 })

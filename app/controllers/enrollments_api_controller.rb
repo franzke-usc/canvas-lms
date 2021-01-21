@@ -416,7 +416,7 @@ class EnrollmentsApiController < ApplicationController
   #
   # @returns [Enrollment]
   def index
-    Shackles.activate(:slave) do
+    GuardRail.activate(:secondary) do
       endpoint_scope = (@context.is_a?(Course) ? (@section.present? ? "section" : "course") : "user")
 
       return unless enrollments = @context.is_a?(Course) ?
@@ -515,7 +515,7 @@ class EnrollmentsApiController < ApplicationController
   #  The ID of the enrollment object
   # @returns Enrollment
   def show
-    Shackles.activate(:slave) do
+    GuardRail.activate(:secondary) do
       enrollment = @context.all_enrollments.find(params[:id])
       if enrollment.user_id == @current_user.id || authorized_action(@context, @current_user, :read_roster)
         render :json => enrollment_json(enrollment, @current_user, session)
@@ -626,7 +626,7 @@ class EnrollmentsApiController < ApplicationController
         role = @context.account.get_course_role_by_name(role_name)
       else
         type = "StudentEnrollment" if type.blank?
-        role = Role.get_built_in_role(type)
+        role = Role.get_built_in_role(type, root_account_id: @context.root_account_id)
         if role.nil? || !role.course_role?
           errors << @@errors[:bad_type]
         end
@@ -965,12 +965,6 @@ class EnrollmentsApiController < ApplicationController
       role_ids = Array(role_ids).map(&:to_i)
       condition = 'enrollments.role_id IN (:role_ids)'
       replacements[:role_ids] = role_ids
-
-      built_in_roles = role_ids.map{|r_id| Role.built_in_roles_by_id[r_id]}.compact
-      if built_in_roles.present?
-        condition = "(#{condition} OR (enrollments.role_id IS NULL AND enrollments.type IN (:built_in_role_types)))"
-        replacements[:built_in_role_types] = built_in_roles.map(&:name)
-      end
       clauses << condition
     elsif type.present?
       clauses << 'enrollments.type IN (:type)'

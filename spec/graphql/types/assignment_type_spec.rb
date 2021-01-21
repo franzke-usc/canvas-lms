@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2017 - present Instructure, Inc.
 #
@@ -545,6 +547,20 @@ describe Types::AssignmentType do
           } } } }
         GQL
       ).to eq [[student.id.to_s]]
+    end
+
+    it "works for Noop tags" do
+      course.root_account.enable_feature! 'conditional_release'
+      assignment.assignment_overrides.create!(set_type: 'Noop', set_id: 555)
+      expect(
+        assignment_type.resolve(<<~GQL, current_user: teacher)
+          assignmentOverrides { edges { node { set {
+            ... on Noop {
+              _id
+            }
+          } } } }
+        GQL
+      ).to eq ['555']
     end
   end
 

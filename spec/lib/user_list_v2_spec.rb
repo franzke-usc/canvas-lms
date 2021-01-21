@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 # coding: utf-8
 #
 # Copyright (C) 2016 - present Instructure, Inc.
@@ -30,6 +32,11 @@ describe UserListV2 do
   it "should complain about invalid input" do
     ul = UserListV2.new "i\x01nstructure", search_type: 'unique_id'
     expect(ul.errors).to eq [{:address => "i\x01nstructure", :details => :unparseable}]
+  end
+
+  it "responds responsibly to incorrect search type" do
+    expect { UserListV2.new "instructure", search_type: 'tarnation_declaration' }.
+      to raise_error(UserListV2::ParameterError)
   end
 
   it "should not fail with unicode names" do

@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 #
 # Copyright (C) 2017 Instructure, Inc.
 #
@@ -25,6 +27,7 @@ module Types
     implements GraphQL::Types::Relay::Node
     implements Interfaces::TimestampInterface
     implements Interfaces::LegacyIDInterface
+    implements Interfaces::AssetStringInterface
 
     global_id_field :id
 
